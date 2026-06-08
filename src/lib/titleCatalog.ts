@@ -19,6 +19,9 @@ export const loyalSubjectTitle: TitleDefinition = {
   flavor: "You follow the crown and pay taxes through a broken portal.",
 };
 
+const royalContractId = "royal_contract";
+const royalContractTitleMaxLevel = 5;
+
 const titleBands: TitleBand[] = [
   {
     name: "Court Marketing Intern",
@@ -594,8 +597,21 @@ export function titleForLevelAndInventory(
   level: number,
   inventoryItemIds: readonly string[],
 ): TitleDefinition {
-  void inventoryItemIds;
-  return getTitleForLevel(level);
+  const baseTitle = getTitleForLevel(level);
+
+  if (
+    level <= royalContractTitleMaxLevel &&
+    inventoryItemIds.includes(royalContractId)
+  ) {
+    return {
+      ...baseTitle,
+      name: "Court Marketing Manager",
+      description: "Official marketing manager for the Aethernet royal court.",
+      flavor: "The contract is mostly legitimate, depending on who asks.",
+    };
+  }
+
+  return baseTitle;
 }
 
 export function titleHoverText(title: TitleDefinition): string {

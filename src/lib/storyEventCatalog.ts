@@ -77,7 +77,7 @@ export const royalContractStoryEvent: PurchaseStoryEvent = {
   minLevel: 2,
   title: "A Royal Contract",
   body:
-    "The ink is barely dry, but the paperwork appears official enough. You now work under contract for the Royal Influence Office, with all the duties and very few of the privileges.",
+    "The ink is barely dry, but the paperwork appears official enough. You now work under contract for the Royal Influence Office, with all the duties and very few of the privileges. Your new title is Court Marketing Manager.",
 };
 
 export const storyEvents: StoryEvent[] = [
