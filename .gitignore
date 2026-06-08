@@ -1,0 +1,35 @@
+# Dependencies
+node_modules/
+
+# SvelteKit/Vite output
+build/
+.svelte-kit/
+package/
+vite.config.js.timestamp-*
+vite.config.ts.timestamp-*
+
+# Tauri/Rust output
+src-tauri/target/
+src-tauri/gen/
+
+# Release artifacts
+release/
+damage-control-installer.exe
+*.exe
+
+# OS/editor noise
+.DS_Store
+Thumbs.db
+*.swp
+
+# Logs
+*.log
+npm-debug.log*
+pnpm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+
+# Local environment
+.env
+.env.*
+!.env.example
