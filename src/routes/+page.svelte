@@ -825,6 +825,36 @@
     scheduleWindowResize();
   }
 
+  async function showExpandedMenu(menuId: "shop-list" | "inventory" | "settings") {
+    await tick();
+    await resizeWindowToPanel();
+    await new Promise<void>((resolve) => {
+      window.requestAnimationFrame(() => resolve());
+    });
+
+    if (!panelElement) {
+      return;
+    }
+
+    if (panelElement.scrollHeight <= panelElement.clientHeight + 1) {
+      panelElement.scrollTo({ top: 0, behavior: "smooth" });
+      return;
+    }
+
+    const menu = document.getElementById(menuId);
+
+    if (menu === null) {
+      return;
+    }
+
+    const panelBounds = panelElement.getBoundingClientRect();
+    const menuBounds = menu.getBoundingClientRect();
+    panelElement.scrollTo({
+      top: panelElement.scrollTop + menuBounds.top - panelBounds.top,
+      behavior: "smooth",
+    });
+  }
+
   function toggleShop() {
     const shouldOpen = !isShopOpen;
     closeAllMenus();
@@ -837,6 +867,9 @@
     }
 
     scheduleWindowResize();
+    if (shouldOpen) {
+      void showExpandedMenu("shop-list");
+    }
   }
 
   function toggleInventory() {
@@ -844,6 +877,9 @@
     closeAllMenus();
     isInventoryOpen = shouldOpen;
     scheduleWindowResize();
+    if (shouldOpen) {
+      void showExpandedMenu("inventory");
+    }
   }
 
   function toggleSettings() {
@@ -851,6 +887,9 @@
     closeAllMenus();
     isSettingsOpen = shouldOpen;
     scheduleWindowResize();
+    if (shouldOpen) {
+      void showExpandedMenu("settings");
+    }
   }
 
   function toggleDevTools() {

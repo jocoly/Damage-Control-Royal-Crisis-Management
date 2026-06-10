@@ -34,14 +34,14 @@
       <path d="M62 215q11 5 22 0l-1 19q-1 9-11 9H54q-9 0-8-7 2-8 16-21zM96 215q11 5 22 0 14 13 16 21 1 7-8 7h-18q-10 0-11-9z" fill="var(--skin)" stroke="#563522" stroke-width="5" stroke-linejoin="round"/>
     {/if}
     <path
-      d="M66 96Q51 94 42 105q-5 6-8 18l-13 57q-3 13 7 18 10 4 17-4 3-4 5-13l11-47q3-12 14-20z"
+      d="M68 98Q56 96 48 106q-4 6-7 17l-14 57q-3 12 5 17 8 3 13-5 2-4 4-12l11-46q3-11 11-19z"
       fill="var(--skin)"
       stroke="#563522"
       stroke-width="5"
       stroke-linejoin="round"
     />
     <path
-      d="M114 96q15-2 24 9 5 6 8 18l13 57q3 13-7 18-10 4-17-4-3-4-5-13l-11-47q-3-12-14-20z"
+      d="M112 98q12-2 20 8 4 6 7 17l14 57q3 12-5 17-8 3-13-5-2-4-4-12l-11-46q-3-11-11-19z"
       fill="var(--skin)"
       stroke="#563522"
       stroke-width="5"
@@ -91,8 +91,7 @@
     {/if}
 
     {#if appearance.eyes === "bright"}
-      <g fill="#f8f3df" stroke="#563522" stroke-width="3"><ellipse cx="75" cy="55" rx="9" ry="8"/><ellipse cx="105" cy="55" rx="9" ry="8"/></g>
-      <g fill="#345064"><circle cx="76" cy="56" r="4"/><circle cx="104" cy="56" r="4"/></g>
+      <g fill="#29231f"><circle cx="75" cy="55" r="4"/><circle cx="105" cy="55" r="4"/></g>
     {:else if appearance.eyes === "calm"}
       <g fill="none" stroke="#3a291d" stroke-linecap="round" stroke-width="4"><path d="M66 56q9 7 18 0"/><path d="M96 56q9 7 18 0"/></g>
     {:else if appearance.eyes === "bold"}
