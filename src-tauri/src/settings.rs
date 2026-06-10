@@ -1,5 +1,10 @@
+use crate::game_state::InputCounts;
 use serde::{Deserialize, Serialize};
-use std::{fs, path::Path, sync::Mutex};
+use std::{
+    fs,
+    path::Path,
+    sync::{Arc, Mutex},
+};
 use tauri::Manager;
 #[cfg(windows)]
 use winreg::{
@@ -45,6 +50,22 @@ pub struct AppSettings {
     pub show_taskbar_icon: bool,
     #[serde(default)]
     pub dev_mode: bool,
+    #[serde(default = "default_selected_outfit_id")]
+    pub selected_outfit_id: String,
+    #[serde(default)]
+    pub character_created: bool,
+    #[serde(default = "default_character_eyes")]
+    pub character_eyes: String,
+    #[serde(default = "default_character_nose")]
+    pub character_nose: String,
+    #[serde(default = "default_character_mouth")]
+    pub character_mouth: String,
+    #[serde(default = "default_character_hair")]
+    pub character_hair: String,
+    #[serde(default = "default_character_hair_color")]
+    pub character_hair_color: String,
+    #[serde(default = "default_character_skin_tone")]
+    pub character_skin_tone: String,
 }
 
 impl Default for AppSettings {
@@ -54,6 +75,14 @@ impl Default for AppSettings {
             always_on_top: true,
             show_taskbar_icon: true,
             dev_mode: false,
+            selected_outfit_id: default_selected_outfit_id(),
+            character_created: false,
+            character_eyes: default_character_eyes(),
+            character_nose: default_character_nose(),
+            character_mouth: default_character_mouth(),
+            character_hair: default_character_hair(),
+            character_hair_color: default_character_hair_color(),
+            character_skin_tone: default_character_skin_tone(),
         }
     }
 }
@@ -66,6 +95,34 @@ fn default_always_on_top() -> bool {
     true
 }
 
+fn default_selected_outfit_id() -> String {
+    "humble_rags".to_string()
+}
+
+fn default_character_eyes() -> String {
+    "round".to_string()
+}
+
+fn default_character_nose() -> String {
+    "button".to_string()
+}
+
+fn default_character_mouth() -> String {
+    "smile".to_string()
+}
+
+fn default_character_hair() -> String {
+    "bald".to_string()
+}
+
+fn default_character_hair_color() -> String {
+    "brown".to_string()
+}
+
+fn default_character_skin_tone() -> String {
+    "warm".to_string()
+}
+
 #[tauri::command]
 pub fn get_app_settings(settings: tauri::State<'_, std::sync::Arc<SettingsState>>) -> AppSettings {
     settings.current()
@@ -75,22 +132,28 @@ pub fn get_app_settings(settings: tauri::State<'_, std::sync::Arc<SettingsState>
 pub fn update_app_settings(
     app: tauri::AppHandle,
     settings_state: tauri::State<'_, std::sync::Arc<SettingsState>>,
+    counts: tauri::State<'_, Arc<InputCounts>>,
     settings: AppSettings,
 ) -> Result<AppSettings, String> {
     let previous_settings = settings_state.current();
 
-    persist_app_settings(&app, &settings_state, previous_settings, settings)
+    let settings = persist_app_settings(&app, &settings_state, previous_settings, settings)?;
+    counts.set_input_enabled(settings.character_created);
+    Ok(settings)
 }
 
 #[tauri::command]
 pub fn reset_app_settings(
     app: tauri::AppHandle,
     settings_state: tauri::State<'_, std::sync::Arc<SettingsState>>,
+    counts: tauri::State<'_, Arc<InputCounts>>,
 ) -> Result<AppSettings, String> {
     let previous_settings = settings_state.current();
     let settings = AppSettings::default();
 
-    persist_app_settings(&app, &settings_state, previous_settings, settings)
+    let settings = persist_app_settings(&app, &settings_state, previous_settings, settings)?;
+    counts.set_input_enabled(false);
+    Ok(settings)
 }
 
 fn persist_app_settings(
@@ -212,6 +275,10 @@ mod tests {
 
         assert!(settings.always_on_top);
         assert!(!settings.dev_mode);
+        assert_eq!(settings.selected_outfit_id, "humble_rags");
+        assert!(!settings.character_created);
+        assert_eq!(settings.character_eyes, "round");
+        assert_eq!(settings.character_skin_tone, "warm");
     }
 }
 

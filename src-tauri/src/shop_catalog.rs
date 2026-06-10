@@ -9,18 +9,18 @@ static SHOP_ITEMS: OnceLock<Vec<ShopItem>> = OnceLock::new();
 
 pub fn shop_items() -> &'static [ShopItem] {
     SHOP_ITEMS.get_or_init(|| {
-        let mut items = Vec::with_capacity(99);
+        let mut items = Vec::with_capacity(33);
         items.push(ShopItem::new(
             ROYAL_CONTRACT_ID.to_string(),
-            cost_for_level(2),
+            1_000,
             2,
             ShopItemCategory::OrgChart,
             None,
         ));
 
-        for level in 3..=100 {
+        for (content_index, level) in (5..=98).step_by(3).enumerate() {
             items.push(ShopItem::new(
-                item_id_for_level(level),
+                item_id_for_index(content_index),
                 cost_for_level(level),
                 level,
                 ShopItemCategory::PowerUpgrade,
@@ -86,7 +86,7 @@ pub fn find_shop_item(item_id: &str) -> Option<&'static ShopItem> {
     shop_items().iter().find(|item| item.id == item_id)
 }
 
-fn item_id_for_level(level: u64) -> String {
+fn item_id_for_index(index: usize) -> String {
     const ITEM_IDS: [&str; 98] = [
         CRUMPLED_COURT_ONBOARDING_MANUAL_ID,
         "official_wax_seal",
@@ -188,7 +188,7 @@ fn item_id_for_level(level: u64) -> String {
         "throne_of_public_opinion",
     ];
 
-    ITEM_IDS[level.saturating_sub(3) as usize].to_string()
+    ITEM_IDS[index].to_string()
 }
 
 fn cost_for_level(level: u64) -> u64 {

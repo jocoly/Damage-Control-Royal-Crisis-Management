@@ -4,7 +4,7 @@ use std::sync::atomic::Ordering;
 
 impl InputCounts {
     pub(crate) fn record_event(&self, event_type: EventType) {
-        if !self.has_kingdom_name() {
+        if !self.can_record_input() {
             if let EventType::KeyRelease(key) = event_type {
                 self.pressed_keys
                     .lock()
@@ -49,7 +49,7 @@ impl InputCounts {
     }
 
     pub(crate) fn record_focused_keypress(&self, event_at_millis: u64) {
-        if !self.has_kingdom_name() {
+        if !self.can_record_input() {
             return;
         }
 

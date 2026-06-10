@@ -4,10 +4,28 @@
   import { getCurrentWindow } from "@tauri-apps/api/window";
   import { onMount, tick } from "svelte";
   import { startFocusedInputBridge } from "$lib/focusedInputBridge";
+  import CharacterAvatar from "$lib/CharacterAvatar.svelte";
+  import CharacterScene from "$lib/CharacterScene.svelte";
+  import {
+    defaultCharacterAppearance,
+    eyeOptions,
+    hairColorOptions,
+    hairOptions,
+    mouthOptions,
+    noseOptions,
+    skinToneOptions,
+    type CharacterAppearance,
+  } from "$lib/characterAppearance";
+  import {
+    outfitForId,
+    outfitUnlockedAtLevel,
+    outfitsForProgress,
+    sceneUnlockedAtLevel,
+    sceneSelectionForProgress,
+  } from "$lib/sceneCatalog";
   import {
     isPromotionLevel,
     loyalSubjectTitle,
-    titleForLevel,
     titleForLevelAndInventory,
     titleHoverText,
   } from "$lib/titleCatalog";
@@ -24,6 +42,7 @@
     type PurchaseStoryEvent,
   } from "$lib/storyEventCatalog";
   import {
+    inventoryImageForItem,
     powerUpgradeDetails,
     shopItemForLevel,
     shopItems,
@@ -74,6 +93,20 @@
     always_on_top: true,
     show_taskbar_icon: true,
     dev_mode: false,
+    selected_outfit_id: "humble_rags",
+    character_created: false,
+    character_eyes: defaultCharacterAppearance.eyes,
+    character_nose: defaultCharacterAppearance.nose,
+    character_mouth: defaultCharacterAppearance.mouth,
+    character_hair: defaultCharacterAppearance.hair,
+    character_hair_color: defaultCharacterAppearance.hairColor,
+    character_skin_tone: defaultCharacterAppearance.skinTone,
+  });
+  let areSettingsLoaded = $state(false);
+  let isSavingCharacter = $state(false);
+  let characterCreationError = $state("");
+  let characterDraft = $state<CharacterAppearance>({
+    ...defaultCharacterAppearance,
   });
   let pendingPurchaseId = $state<string | null>(null);
   let confirmingPurchaseId = $state<string | null>(null);
@@ -97,7 +130,9 @@
   let activeNotification = $state<GameNotification | null>(null);
   let suspendedTutorialNotification = $state<GameNotification | null>(null);
   let suspendedTutorialStepIndex = $state(0);
+  let isTutorialNotificationReview = $state(false);
   let activeTutorialStepIndex = $state(0);
+  let tutorialInfluenceInputCount = $state(0);
   let panelElement: HTMLElement;
   let lastWindowWidth = 0;
   let lastWindowHeight = 0;
@@ -126,6 +161,19 @@
     level: number;
     storyEventId?: string;
     tutorialSteps?: MenuTutorialStep[];
+    reveal?:
+      | {
+          kind: "scene";
+          name: string;
+          image: string;
+          filter?: string;
+        }
+      | {
+          kind: "title";
+          name: string;
+          description: string;
+          flavor: string;
+        };
   };
 
   type AppSettings = {
@@ -133,6 +181,14 @@
     always_on_top: boolean;
     show_taskbar_icon: boolean;
     dev_mode: boolean;
+    selected_outfit_id: string;
+    character_created: boolean;
+    character_eyes: string;
+    character_nose: string;
+    character_mouth: string;
+    character_hair: string;
+    character_hair_color: string;
+    character_skin_tone: string;
   };
 
   const numberFormatter = new Intl.NumberFormat("en-US");
@@ -247,7 +303,9 @@
     activeNotification = null;
     suspendedTutorialNotification = null;
     suspendedTutorialStepIndex = 0;
+    isTutorialNotificationReview = false;
     activeTutorialStepIndex = 0;
+    tutorialInfluenceInputCount = 0;
     hasLoadedInitialSnapshot = true;
     lastSeenLevel = 1;
     lastSeenPowerEventSequence = 0;
@@ -265,9 +323,49 @@
   }
 
   function enqueueLevelNotifications(startLevel: number, endLevel: number) {
+    const revealNotifications: GameNotification[] = [];
     const nextNotifications: GameNotification[] = [];
 
     for (let level = startLevel; level <= endLevel; level += 1) {
+      const shopUnlock = shopItemForLevel(level);
+      const outfitUnlock = outfitUnlockedAtLevel(level);
+      const sceneUnlock = sceneUnlockedAtLevel(level);
+
+      if (sceneUnlock !== undefined) {
+        revealNotifications.push({
+          id: `scene-unlock-${level}-${Date.now()}`,
+          title: "New Scene!",
+          body: sceneUnlock.name,
+          level,
+          reveal: {
+            kind: "scene",
+            name: sceneUnlock.name,
+            image: sceneUnlock.image,
+            filter: sceneUnlock.filter,
+          },
+        });
+      }
+
+      if (isPromotionLevel(level)) {
+        const unlockedTitle = titleForLevelAndInventory(
+          level,
+          counts.inventory_item_ids,
+        );
+
+        revealNotifications.push({
+          id: `promotion-${level}-${Date.now()}`,
+          title: "New Title!",
+          body: unlockedTitle.name,
+          level,
+          reveal: {
+            kind: "title",
+            name: unlockedTitle.name,
+            description: unlockedTitle.description,
+            flavor: unlockedTitle.flavor,
+          },
+        });
+      }
+
       nextNotifications.push({
         id: `level-${level}-${Date.now()}`,
         title: "Level up!",
@@ -275,17 +373,26 @@
         level,
       });
 
-      if (isPromotionLevel(level)) {
+      const unlock = shopUnlock
+        ? { title: "New item available!", body: shopUnlock.name }
+        : outfitUnlock
+          ? { title: "Wardrobe unlocked!", body: outfitUnlock.name }
+          : null;
+
+      if (unlock !== null) {
         nextNotifications.push({
-          id: `promotion-${level}-${Date.now()}`,
-          title: "Promotion!",
-          body: titleForLevel(level).name,
+          id: `unlock-${level}-${Date.now()}`,
+          ...unlock,
           level,
         });
       }
     }
 
-    notifications = [...notifications, ...nextNotifications];
+    notifications = [
+      ...revealNotifications,
+      ...notifications,
+      ...nextNotifications,
+    ];
   }
 
   function enqueueUnseenStoryNotifications(
@@ -330,6 +437,7 @@
 
   function enqueueStoryNotification(
     storyEvent: NotificationStoryEvent | PurchaseStoryEvent,
+    priority = false,
   ) {
     const isAlreadySeen = counts.seen_story_event_ids.includes(storyEvent.id);
     const isAlreadyQueued = notifications.some(
@@ -343,7 +451,10 @@
       return;
     }
 
-    notifications = [...notifications, storyNotification(storyEvent)];
+    const notification = storyNotification(storyEvent);
+    notifications = priority
+      ? [notification, ...notifications]
+      : [...notifications, notification];
   }
 
   function markStoryNotificationSeen(notification: GameNotification) {
@@ -418,18 +529,28 @@
       activeTutorialStepIndex = suspendedTutorialStepIndex;
       suspendedTutorialNotification = null;
       suspendedTutorialStepIndex = 0;
+      isTutorialNotificationReview = false;
       return;
     }
 
     activeNotification = null;
+    isTutorialNotificationReview = false;
   }
 
   function isTutorialNotification(notification: GameNotification | null) {
     return notification?.tutorialSteps !== undefined;
   }
 
+  function isTutorialActive() {
+    return isTutorialNotification(activeNotification) || isTutorialNotificationReview;
+  }
+
   function activeTutorialStep() {
     return activeNotification?.tutorialSteps?.[activeTutorialStepIndex] ?? null;
+  }
+
+  function activeTutorialBody() {
+    return activeTutorialStep()?.body ?? activeNotification?.body ?? "";
   }
 
   function isTutorialTarget(target: MenuTutorialTarget) {
@@ -450,6 +571,7 @@
 
     markStoryNotificationSeen(activeNotification);
     activeTutorialStepIndex = 0;
+    isTutorialNotificationReview = false;
 
     if (notifications.length > 0) {
       const [nextNotification, ...remainingNotifications] = notifications;
@@ -465,16 +587,11 @@
   }
 
   function queueStartingNotifications() {
-    if (counts.seen_story_event_ids.includes(hiredStoryEvent.id)) {
-      return;
-    }
-
     const queuedIds = new Set([
       ...notifications.map((notification) => notification.id),
       activeNotification?.id ?? "",
     ]);
     const startingLevelId = "starting-level";
-    const hiredNotificationId = `story-${hiredStoryEvent.id}`;
 
     notifications = [
       ...notifications,
@@ -488,24 +605,61 @@
               level: 1,
             },
           ]),
-      ...(queuedIds.has(hiredNotificationId)
-        ? []
-        : [
-            {
-              id: hiredNotificationId,
-              title: hiredStoryEvent.title,
-              body: `${hiredStoryEvent.body} Your new title is ${titleForLevel(1).name}.`,
-              level: hiredStoryEvent.minLevel,
-              storyEventId: hiredStoryEvent.id,
-            },
-          ]),
     ];
   }
 
   function handleTutorialAnywherePointerDown(event: PointerEvent) {
-    if (event.button === 0) {
-      completeTutorialStep("anywhere");
+    if (event.button !== 0) {
+      return;
     }
+
+    const target = activeTutorialStep()?.target;
+
+    if (target === "influence") {
+      event.preventDefault();
+      event.stopPropagation();
+      recordTutorialInfluenceInput();
+      return;
+    }
+
+    if (
+      target === "scene" ||
+      target === "details" ||
+      target === "shop" ||
+      target === "inventory" ||
+      target === "settings" ||
+      target === "anywhere"
+    ) {
+      event.preventDefault();
+      event.stopPropagation();
+      completeTutorialStep(target);
+    }
+  }
+
+  function recordTutorialInfluenceInput() {
+    if (!isTutorialTarget("influence")) {
+      return;
+    }
+
+    tutorialInfluenceInputCount += 1;
+
+    if (tutorialInfluenceInputCount >= 5) {
+      tutorialInfluenceInputCount = 0;
+      completeTutorialStep("influence");
+    }
+  }
+
+  function handleTutorialKeydown(event: KeyboardEvent) {
+    if (
+      event.repeat ||
+      !isTutorialTarget("influence") ||
+      (event.target instanceof Element &&
+        event.target.closest("input, textarea, [contenteditable='true']") !== null)
+    ) {
+      return;
+    }
+
+    recordTutorialInfluenceInput();
   }
 
   function handleNotificationButtonClick() {
@@ -513,6 +667,7 @@
       activeTutorialStepIndex += 1;
       suspendedTutorialNotification = activeNotification;
       suspendedTutorialStepIndex = activeTutorialStepIndex;
+      isTutorialNotificationReview = true;
       activeNotification = null;
     }
 
@@ -540,12 +695,36 @@
     return numberFormatter.format(value);
   }
 
+  function hasBeenHired() {
+    return counts.level >= hiredStoryEvent.minLevel;
+  }
+
+  function unlockedOutfits() {
+    return outfitsForProgress(counts.level, hasBeenHired());
+  }
+
+  function equippedOutfit() {
+    return (
+      unlockedOutfits().find((outfit) => outfit.id === appSettings.selected_outfit_id) ??
+      outfitForId("humble_rags")
+    );
+  }
+
   function currentTitle() {
-    if (!counts.seen_story_event_ids.includes(hiredStoryEvent.id)) {
+    if (!hasBeenHired()) {
       return loyalSubjectTitle;
     }
 
     return titleForLevelAndInventory(counts.level, counts.inventory_item_ids);
+  }
+
+  function currentSceneSelection() {
+    return sceneSelectionForProgress(
+      counts.level,
+      hasBeenHired(),
+      ownsRoyalContract(),
+      appSettings.selected_outfit_id,
+    );
   }
 
   function toggleTitleDescription() {
@@ -608,8 +787,6 @@
       resetMessage = "";
       closeAllMenus();
       applySnapshot(snapshot, { syncLevelTracker: true });
-      enqueueUnseenStoryNotifications(1, snapshot.level, snapshot.seen_story_event_ids);
-      openNextNotification();
       scheduleWindowResize();
     } catch (error) {
       kingdomNameError =
@@ -645,7 +822,6 @@
     const shouldOpen = !isDetailsOpen;
     closeAllMenus();
     isDetailsOpen = shouldOpen;
-    completeTutorialStep("details");
     scheduleWindowResize();
   }
 
@@ -660,7 +836,6 @@
       closeShopState();
     }
 
-    completeTutorialStep("shop");
     scheduleWindowResize();
   }
 
@@ -668,7 +843,6 @@
     const shouldOpen = !isInventoryOpen;
     closeAllMenus();
     isInventoryOpen = shouldOpen;
-    completeTutorialStep("inventory");
     scheduleWindowResize();
   }
 
@@ -676,7 +850,6 @@
     const shouldOpen = !isSettingsOpen;
     closeAllMenus();
     isSettingsOpen = shouldOpen;
-    completeTutorialStep("settings");
     scheduleWindowResize();
   }
 
@@ -687,19 +860,11 @@
     scheduleWindowResize();
   }
 
-  async function updateSetting(key: keyof AppSettings, value: boolean) {
+  async function saveAppSettings(nextSettings: AppSettings) {
     const previousSettings = appSettings;
-    const nextSettings = {
-      ...appSettings,
-      [key]: value,
-    };
 
     settingsMessage = "";
     appSettings = nextSettings;
-    if (key === "dev_mode" && !value) {
-      isDevToolsOpen = false;
-      devMessage = "";
-    }
 
     try {
       appSettings = await invoke<AppSettings>("update_app_settings", {
@@ -708,6 +873,94 @@
     } catch {
       appSettings = previousSettings;
       settingsMessage = "Setting update failed.";
+    }
+  }
+
+  async function updateSetting(
+    key: "run_on_startup" | "always_on_top" | "show_taskbar_icon" | "dev_mode",
+    value: boolean,
+  ) {
+    if (key === "dev_mode" && !value) {
+      isDevToolsOpen = false;
+      devMessage = "";
+    }
+
+    await saveAppSettings({
+      ...appSettings,
+      [key]: value,
+    });
+  }
+
+  async function equipOutfit(outfitId: string) {
+    if (
+      appSettings.selected_outfit_id === outfitId ||
+      !unlockedOutfits().some((outfit) => outfit.id === outfitId)
+    ) {
+      return;
+    }
+
+    await saveAppSettings({
+      ...appSettings,
+      selected_outfit_id: outfitId,
+    });
+  }
+
+  function currentCharacterAppearance(): CharacterAppearance {
+    return {
+      eyes: appSettings.character_eyes,
+      nose: appSettings.character_nose,
+      mouth: appSettings.character_mouth,
+      hair: appSettings.character_hair,
+      hairColor: appSettings.character_hair_color,
+      skinTone: appSettings.character_skin_tone,
+    };
+  }
+
+  function selectCharacterFeature(
+    feature: keyof CharacterAppearance,
+    value: string,
+  ) {
+    characterDraft = {
+      ...characterDraft,
+      [feature]: value,
+    };
+    characterCreationError = "";
+  }
+
+  async function saveCharacter() {
+    if (isSavingCharacter) {
+      return;
+    }
+
+    isSavingCharacter = true;
+    characterCreationError = "";
+
+    const nextSettings: AppSettings = {
+      ...appSettings,
+      character_created: true,
+      character_eyes: characterDraft.eyes,
+      character_nose: characterDraft.nose,
+      character_mouth: characterDraft.mouth,
+      character_hair: characterDraft.hair,
+      character_hair_color: characterDraft.hairColor,
+      character_skin_tone: characterDraft.skinTone,
+    };
+
+    try {
+      appSettings = await invoke<AppSettings>("update_app_settings", {
+        settings: nextSettings,
+      });
+      enqueueUnseenStoryNotifications(
+        1,
+        counts.level,
+        counts.seen_story_event_ids,
+      );
+      openNextNotification();
+      scheduleWindowResize();
+    } catch {
+      characterCreationError = "Your character could not be saved.";
+    } finally {
+      isSavingCharacter = false;
     }
   }
 
@@ -816,7 +1069,7 @@
         result.status === "purchased" &&
         item.id === royalContractStoryEvent.itemId
       ) {
-        enqueueStoryNotification(royalContractStoryEvent);
+        enqueueStoryNotification(royalContractStoryEvent, true);
       }
 
       purchaseMessage =
@@ -864,6 +1117,7 @@
     try {
       const snapshot = await invoke<InputSnapshot>("reset_progress");
       appSettings = await invoke<AppSettings>("reset_app_settings");
+      characterDraft = { ...defaultCharacterAppearance };
       applySnapshot(snapshot, { syncLevelTracker: true });
       confirmingPurchaseId = null;
       resetFrontendRunState();
@@ -958,9 +1212,11 @@
       return;
     }
 
-    const isNamingKingdom = counts.kingdom_name === null;
+    const isOnboarding =
+      counts.kingdom_name === null ||
+      (areSettingsLoaded && !appSettings.character_created);
     const width = Math.ceil(panelElement.offsetWidth);
-    const maximumHeight = isNamingKingdom
+    const maximumHeight = isOnboarding
       ? 560
       : isDetailsOpen
         ? Number.POSITIVE_INFINITY
@@ -985,6 +1241,9 @@
 
     void invoke<AppSettings>("get_app_settings").then((settings) => {
       appSettings = settings;
+      characterDraft = currentCharacterAppearance();
+      areSettingsLoaded = true;
+      scheduleWindowResize();
     });
 
     const stopFocusedInputBridge = startFocusedInputBridge();
@@ -997,6 +1256,7 @@
     });
     const resizeObserver = new ResizeObserver(scheduleWindowResize);
     window.addEventListener("pointerdown", handleTutorialAnywherePointerDown, true);
+    window.addEventListener("keydown", handleTutorialKeydown, true);
 
     if (panelElement) {
       resizeObserver.observe(panelElement);
@@ -1008,6 +1268,7 @@
       stopVisualUpdateLoop();
       resizeObserver.disconnect();
       window.removeEventListener("pointerdown", handleTutorialAnywherePointerDown, true);
+      window.removeEventListener("keydown", handleTutorialKeydown, true);
 
       if (resizeFrameId !== undefined) {
         window.cancelAnimationFrame(resizeFrameId);
@@ -1024,7 +1285,7 @@
   <section
     bind:this={panelElement}
     class="panel"
-    class:kingdom-onboarding={counts.kingdom_name === null}
+    class:kingdom-onboarding={counts.kingdom_name === null || (areSettingsLoaded && !appSettings.character_created)}
     class:details-open={isDetailsOpen}
     class:settings-open={isSettingsOpen}
     aria-label="Input progress"
@@ -1060,7 +1321,124 @@
           </button>
         </form>
       </section>
-    {:else}
+    {:else if areSettingsLoaded && !appSettings.character_created}
+      <section class="character-creator" aria-label="Create your character">
+        <div class="character-creator-heading">
+          <p class="kingdom-intro-eyebrow">Royal Personnel Record</p>
+          <h1>Create Your Character</h1>
+          <p>Choose the face that will represent the Kingdom of {counts.kingdom_name}.</p>
+        </div>
+
+        <div class="character-creator-layout">
+          <div class="character-preview" aria-label="Character preview">
+            <CharacterAvatar appearance={characterDraft} />
+          </div>
+
+          <div class="character-controls">
+            <fieldset>
+              <legend>Eyes</legend>
+              <div class="choice-row">
+                {#each eyeOptions as option}
+                  <button
+                    type="button"
+                    class="feature-choice"
+                    class:chosen={characterDraft.eyes === option.id}
+                    aria-label={option.name}
+                    title={option.name}
+                    onclick={() => selectCharacterFeature("eyes", option.id)}
+                  ></button>
+                {/each}
+              </div>
+            </fieldset>
+            <fieldset>
+              <legend>Nose</legend>
+              <div class="choice-row">
+                {#each noseOptions as option}
+                  <button
+                    type="button"
+                    class="feature-choice"
+                    class:chosen={characterDraft.nose === option.id}
+                    aria-label={option.name}
+                    title={option.name}
+                    onclick={() => selectCharacterFeature("nose", option.id)}
+                  ></button>
+                {/each}
+              </div>
+            </fieldset>
+            <fieldset>
+              <legend>Mouth</legend>
+              <div class="choice-row">
+                {#each mouthOptions as option}
+                  <button
+                    type="button"
+                    class="feature-choice"
+                    class:chosen={characterDraft.mouth === option.id}
+                    aria-label={option.name}
+                    title={option.name}
+                    onclick={() => selectCharacterFeature("mouth", option.id)}
+                  ></button>
+                {/each}
+              </div>
+            </fieldset>
+            <fieldset>
+              <legend>Hair</legend>
+              <div class="choice-row">
+                {#each hairOptions as option}
+                  <button
+                    type="button"
+                    class="feature-choice"
+                    class:chosen={characterDraft.hair === option.id}
+                    aria-label={option.name}
+                    title={option.name}
+                    onclick={() => selectCharacterFeature("hair", option.id)}
+                  ></button>
+                {/each}
+              </div>
+            </fieldset>
+            <fieldset>
+              <legend>Hair Color</legend>
+              <div class="swatch-row">
+                {#each hairColorOptions as option}
+                  <button
+                    type="button"
+                    class:chosen={characterDraft.hairColor === option.id}
+                    style={`--swatch: ${option.color}`}
+                    aria-label={option.name}
+                    title={option.name}
+                    onclick={() => selectCharacterFeature("hairColor", option.id)}
+                  ></button>
+                {/each}
+              </div>
+            </fieldset>
+            <fieldset>
+              <legend>Skin Tone</legend>
+              <div class="swatch-row">
+                {#each skinToneOptions as option}
+                  <button
+                    type="button"
+                    class:chosen={characterDraft.skinTone === option.id}
+                    style={`--swatch: ${option.color}`}
+                    aria-label={option.name}
+                    title={option.name}
+                    onclick={() => selectCharacterFeature("skinTone", option.id)}
+                  ></button>
+                {/each}
+              </div>
+            </fieldset>
+          </div>
+        </div>
+
+        {#if characterCreationError}
+          <p class="kingdom-name-error">{characterCreationError}</p>
+        {/if}
+        <button class="finish-character" type="button" disabled={isSavingCharacter} onclick={saveCharacter}>
+          {isSavingCharacter ? "Saving..." : "Begin Your Rise"}
+        </button>
+      </section>
+    {:else if areSettingsLoaded}
+    {#if isTutorialActive()}
+      <div class="tutorial-dimmer" aria-hidden="true"></div>
+    {/if}
     {#if isPowerProcVisible}
       <div
         class={`power-proc-visual proc-${powerProcVisualFamily}`}
@@ -1099,44 +1477,96 @@
       </div>
     </div>
 
-    <div class="counter">
-      <div class="influence-summary">
+    <div
+      class="title-rank"
+      class:title-reveal-active={activeNotification?.reveal?.kind === "title"}
+    >
+      <div class="title-rank-row">
+        <button
+          class="title-name"
+          type="button"
+          aria-label={`${isTitleDescriptionOpen ? "Hide" : "Show"} information about ${currentTitle().name}`}
+          aria-expanded={isTitleDescriptionOpen}
+          aria-controls="title-description"
+          onclick={toggleTitleDescription}
+        >
+          <p>{currentTitle().name}</p>
+          <span class="title-tooltip" role="tooltip">{titleHoverText(currentTitle())}</span>
+        </button>
+      </div>
+      {#if isTitleDescriptionOpen}
+        <p id="title-description" class="title-description">
+          {currentTitle().description}
+        </p>
+      {/if}
+    </div>
+
+    <div
+      class="influence-summary"
+      class:tutorial-target={isTutorialTarget("influence")}
+    >
+      <span class="influence-label-row">
         <span class="label">Influence</span>
-        <span class="influence-row">
-          <span class="influence" class:compact={counts.influence >= 1_000_000}>
-            {formatNumber(counts.influence)}
-          </span>
-          {#if isPowerProcVisible}
-            <span
-              class="power-proc-dot"
-              style={`--proc-hue: ${powerProcVisualHue}`}
-              aria-label={`Power upgrade triggered for ${formatNumber(powerProcAmount)} Influence`}
-            >
-              +{formatNumber(powerProcAmount)}
-            </span>
-          {/if}
-        </span>
-      </div>
-      <div class="title-rank">
-        <div class="title-rank-row">
-          <button
-            class="title-name"
-            type="button"
-            aria-label={`${isTitleDescriptionOpen ? "Hide" : "Show"} information about ${currentTitle().name}`}
-            aria-expanded={isTitleDescriptionOpen}
-            aria-controls="title-description"
-            onclick={toggleTitleDescription}
+        {#if isPowerProcVisible}
+          <span
+            class="power-proc-dot"
+            style={`--proc-hue: ${powerProcVisualHue}`}
+            aria-label={`Power upgrade triggered for ${formatNumber(powerProcAmount)} Influence`}
           >
-            <p>{currentTitle().name}</p>
-            <span class="title-tooltip" role="tooltip">{titleHoverText(currentTitle())}</span>
-          </button>
-        </div>
-        {#if isTitleDescriptionOpen}
-          <p id="title-description" class="title-description">
-            {currentTitle().description}
-          </p>
+            +{formatNumber(powerProcAmount)}
+          </span>
         {/if}
-      </div>
+      </span>
+      <span class="influence-row">
+        <span class="influence" class:compact={counts.influence >= 1_000_000}>
+          {formatNumber(counts.influence)}
+        </span>
+      </span>
+    </div>
+
+    <div
+      class="counter"
+      class:tutorial-target={isTutorialTarget("scene")}
+      class:scene-reveal-active={activeNotification?.reveal?.kind === "scene"}
+    >
+      <CharacterScene
+        selection={currentSceneSelection()}
+        appearance={currentCharacterAppearance()}
+      />
+      {#if activeNotification?.reveal}
+        <section
+          class="notification-popup unlock-reveal-popup scene-unlock-overlay"
+          class:scene-unlock-popup={activeNotification.reveal.kind === "scene"}
+          class:title-unlock-popup={activeNotification.reveal.kind === "title"}
+          aria-label="Unlock notification"
+        >
+          {#if activeNotification.reveal.kind === "scene"}
+            <div class="unlock-reveal-heading">
+              <span>New Scene</span>
+              <strong>{activeNotification.reveal.name}</strong>
+            </div>
+            <div class="scene-unlock-preview" aria-hidden="true">
+              <img
+                src={activeNotification.reveal.image}
+                alt=""
+                style:filter={activeNotification.reveal.filter}
+              />
+              <i></i>
+            </div>
+            <p class="unlock-reveal-copy">Your surroundings have been upgraded.</p>
+          {:else}
+            <div class="unlock-reveal-heading">
+              <span>New Title</span>
+              <strong>{activeNotification.reveal.name}</strong>
+            </div>
+            <p class="title-reveal-description">{activeNotification.reveal.description}</p>
+            <p class="title-reveal-flavor">{activeNotification.reveal.flavor}</p>
+          {/if}
+          <button type="button" onclick={dismissNotification}>
+            {notifications.length > 0 ? "Next" : "Close"}
+          </button>
+        </section>
+      {/if}
       <div class="level-progress" aria-label="Level progress">
         <div class="progress-summary">
           <span>Level {counts.level}</span>
@@ -1148,14 +1578,22 @@
       </div>
     </div>
 
-    {#if activeNotification}
+    {#if activeNotification && activeNotification.reveal === undefined}
       <section
         class="notification-popup"
         class:tutorial-popup={isTutorialNotification(activeNotification)}
+        class:tutorial-notification-review={isTutorialNotificationReview}
+        class:tutorial-popup-below-influence={isTutorialTarget("influence")}
+        class:tutorial-popup-scene={isTutorialTarget("scene")}
         aria-label="Game notification"
       >
         <p class="notification-title">{activeNotification.title}</p>
-        <p>{activeTutorialStep()?.body ?? activeNotification.body}</p>
+        <p>{activeTutorialBody()}</p>
+        {#if isTutorialTarget("influence")}
+          <p class="tutorial-input-progress">
+            {tutorialInfluenceInputCount} / 5 inputs
+          </p>
+        {/if}
         {#if isTutorialNotification(activeNotification)}
           <p class="tutorial-progress">
             Step {activeTutorialStepIndex + 1} of {activeNotification.tutorialSteps?.length}
@@ -1284,7 +1722,11 @@
     {/if}
 
     {#if isShopOpen}
-      <section id="shop-list" class="shop" aria-label="Shop">
+      <section
+        id="shop-list"
+        class="shop"
+        aria-label="Shop"
+      >
         {#if availableShopItems().length > 0}
           <ul>
             {#each availableShopItems() as item (item.id)}
@@ -1327,42 +1769,99 @@
     {/if}
 
     {#if isInventoryOpen}
-      <section id="inventory" class="inventory" aria-label="Inventory">
-        {#if ownedInventoryItems().length > 0}
-          <ul>
-            {#each ownedInventoryItems() as item}
-              {@const upgradeDetails = powerUpgradeDetails(item)}
-              <li>
-                <p>{item.name}</p>
-                {#if upgradeDetails}
-                  <dl class="inventory-effect-details">
-                    <div>
-                      <dt>Proc Chance</dt>
-                      <dd>{upgradeDetails.procChance}</dd>
-                    </div>
-                    <div>
-                      <dt>Effect</dt>
-                      <dd>{upgradeDetails.effect}</dd>
-                    </div>
-                    <div>
-                      <dt>Value</dt>
-                      <dd>{formatNumber(upgradeDetails.value)} Influence</dd>
-                    </div>
-                  </dl>
-                {:else}
-                  <small>{item.inventoryDescription ?? item.effect}</small>
-                {/if}
+      <section
+        id="inventory"
+        class="inventory"
+        aria-label="Inventory"
+      >
+        <section class="wardrobe" aria-label="Wardrobe">
+          <div class="wardrobe-heading">
+            <p>Wardrobe</p>
+            <small>Equipped: {equippedOutfit().name}</small>
+          </div>
+          <ul class="wardrobe-list">
+            {#each unlockedOutfits() as outfit}
+              <li class:equipped-outfit={appSettings.selected_outfit_id === outfit.id}>
+                <button
+                  class="wardrobe-item"
+                  type="button"
+                  aria-label={`${appSettings.selected_outfit_id === outfit.id ? "Equipped" : "Equip"} ${outfit.name}`}
+                  aria-pressed={appSettings.selected_outfit_id === outfit.id}
+                  onclick={() => equipOutfit(outfit.id)}
+                >
+                  <span class="outfit-preview" aria-hidden="true">
+                    <img
+                      src={outfit.image}
+                      style:filter={outfit.filter ?? "none"}
+                      alt=""
+                    />
+                  </span>
+                  <span class="inventory-icon-tooltip" role="tooltip">
+                    <strong>{outfit.name}</strong>
+                    {#if appSettings.selected_outfit_id === outfit.id}
+                      <small>Equipped</small>
+                    {:else}
+                      <small>Click to equip</small>
+                    {/if}
+                  </span>
+                </button>
               </li>
             {/each}
           </ul>
-        {:else}
-          <p class="empty-panel-message">No items owned.</p>
-        {/if}
+        </section>
+
+        <section class="items-category" aria-label="Items">
+          <div class="inventory-category-heading">
+            <p>Items</p>
+            <small>Purchased upgrades and royal documents.</small>
+          </div>
+          {#if ownedInventoryItems().length > 0}
+            <ul class="item-list">
+              {#each ownedInventoryItems() as item}
+                {@const upgradeDetails = powerUpgradeDetails(item)}
+                <li class="inventory-item-card">
+                  <button class="inventory-item-button" type="button" aria-label={item.name}>
+                    <span class="item-icon" aria-hidden="true">
+                      <img src={inventoryImageForItem(item)} alt="" />
+                    </span>
+                    <span class="inventory-icon-tooltip item-tooltip" role="tooltip">
+                      <strong>{item.name}</strong>
+                      {#if upgradeDetails}
+                        <span class="inventory-effect-details">
+                          <span>
+                            <b>Proc Chance</b>
+                            <small>{upgradeDetails.procChance}</small>
+                          </span>
+                          <span>
+                            <b>Effect</b>
+                            <small>{upgradeDetails.effect}</small>
+                          </span>
+                          <span>
+                            <b>Value</b>
+                            <small>{formatNumber(upgradeDetails.value)} Influence</small>
+                          </span>
+                        </span>
+                      {:else}
+                        <small>{item.inventoryDescription ?? item.effect}</small>
+                      {/if}
+                    </span>
+                  </button>
+                </li>
+              {/each}
+            </ul>
+          {:else}
+            <p class="empty-panel-message">No items owned.</p>
+          {/if}
+        </section>
       </section>
     {/if}
 
     {#if isSettingsOpen}
-      <section id="settings" class="settings" aria-label="Settings">
+      <section
+        id="settings"
+        class="settings"
+        aria-label="Settings"
+      >
         <label class="settings-toggle">
           <span>
             <strong>Run on startup</strong>
@@ -1700,19 +2199,43 @@
   }
 
   .counter {
-    padding: 10px 0 8px;
+    position: relative;
+    isolation: isolate;
+    display: grid;
+    align-content: end;
+    min-height: 120px;
+    overflow: hidden;
+    margin: 8px -4px 8px;
+    border: 1px solid rgba(244, 240, 232, 0.18);
+    border-radius: 8px;
+    padding: 72px 10px 10px;
+    box-shadow:
+      inset 0 0 0 1px rgba(20, 14, 7, 0.4),
+      0 5px 16px rgba(0, 0, 0, 0.2);
+  }
+
+  .counter.scene-reveal-active {
+    border-color: rgba(255, 217, 87, 0.72);
+    animation: scene-stage-reveal 1.15s cubic-bezier(0.2, 0.85, 0.25, 1);
+    box-shadow:
+      inset 0 0 0 1px rgba(255, 240, 168, 0.28),
+      0 0 24px rgba(255, 217, 87, 0.38);
   }
 
   .influence-summary {
+    position: relative;
+    z-index: 4;
     display: grid;
     width: 100%;
-    border: 0;
+    margin: 8px 0 0;
+    border: 1px solid rgba(244, 240, 232, 0.12);
     border-radius: 6px;
-    padding: 0;
+    padding: 8px 9px;
     color: inherit;
-    background: transparent;
+    background: rgba(18, 18, 18, 0.44);
     font: inherit;
     text-align: left;
+    box-sizing: border-box;
   }
 
   .label {
@@ -1729,26 +2252,36 @@
     font-size: 0.84rem;
     font-weight: 800;
     letter-spacing: 0.04em;
-    text-shadow: 0 0 8px rgba(255, 217, 87, 0.38);
+    text-shadow:
+      0 2px 2px rgba(0, 0, 0, 0.85),
+      0 0 8px rgba(255, 217, 87, 0.38);
+  }
+
+  .influence-label-row {
+    display: flex;
+    align-items: center;
+    gap: 7px;
+    min-height: 22px;
   }
 
   .influence {
     margin: 0;
     color: #fff8c9;
-    font-size: 2.5rem;
+    font-size: 2.35rem;
     line-height: 1;
     font-weight: 800;
-    text-shadow: 0 0 10px rgba(255, 217, 87, 0.28);
+    text-shadow:
+      0 3px 2px rgba(0, 0, 0, 0.86),
+      0 0 10px rgba(255, 217, 87, 0.28);
   }
 
   .influence.compact {
-    font-size: 2.1rem;
+    font-size: 1.9rem;
   }
 
   .influence-row {
     display: flex;
     align-items: center;
-    gap: 8px;
     min-height: 38px;
   }
 
@@ -1773,7 +2306,7 @@
   }
 
   .power-proc-visual {
-    position: absolute;
+    position: fixed;
     z-index: 20;
     inset: 0;
     overflow: hidden;
@@ -2262,10 +2795,20 @@
   }
 
   .title-rank {
+    position: relative;
+    z-index: 5;
     display: grid;
     gap: 6px;
-    margin-top: 7px;
+    margin-top: 2px;
     max-width: 100%;
+  }
+
+  .title-rank.title-reveal-active .title-name > p {
+    color: #fff0a8;
+    text-shadow:
+      0 0 8px rgba(255, 217, 87, 0.65),
+      0 0 18px rgba(255, 217, 87, 0.32);
+    animation: title-rank-reveal 1.1s cubic-bezier(0.2, 0.85, 0.25, 1);
   }
 
   .title-rank-row {
@@ -2299,6 +2842,121 @@
     color: #f4f0e8;
     font-size: 0.86rem;
     font-weight: 900;
+  }
+
+  .character-creator {
+    display: grid;
+    gap: 12px;
+    padding: 18px;
+    color: #f4efe5;
+  }
+
+  .character-creator-heading {
+    text-align: center;
+  }
+
+  .character-creator-heading h1 {
+    margin: 2px 0 4px;
+    color: #ffd957;
+    font-size: 1.24rem;
+  }
+
+  .character-creator-heading p {
+    margin: 0;
+    color: #c8c0b4;
+    font-size: 0.72rem;
+  }
+
+  .character-creator-layout {
+    display: grid;
+    grid-template-columns: 128px minmax(0, 1fr);
+    gap: 14px;
+    align-items: center;
+  }
+
+  .character-preview {
+    width: 128px;
+    height: 185px;
+    border: 1px solid rgba(255, 217, 87, 0.28);
+    border-radius: 12px;
+    background:
+      radial-gradient(circle at 50% 34%, rgba(255, 217, 87, 0.12), transparent 43%),
+      rgba(0, 0, 0, 0.2);
+    filter: drop-shadow(0 5px 5px rgba(0, 0, 0, 0.3));
+  }
+
+  .character-controls {
+    display: grid;
+    gap: 7px;
+  }
+
+  .character-controls fieldset {
+    min-width: 0;
+    margin: 0;
+    padding: 0;
+    border: 0;
+  }
+
+  .character-controls legend {
+    margin-bottom: 3px;
+    color: #aaa296;
+    font-size: 0.59rem;
+    font-weight: 900;
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+  }
+
+  .choice-row,
+  .swatch-row {
+    display: flex;
+    gap: 4px;
+  }
+
+  .choice-row button {
+    flex: 1;
+    min-width: 0;
+    min-height: 32px;
+    padding: 3px;
+    border: 1px solid rgba(255, 255, 255, 0.14);
+    border-radius: 6px;
+    background: rgba(255, 255, 255, 0.04);
+    cursor: pointer;
+  }
+
+  .choice-row button.chosen {
+    border-color: #ffd957;
+    background: rgba(255, 217, 87, 0.14);
+    color: #fff4bf;
+  }
+
+  .swatch-row button {
+    width: 28px;
+    height: 24px;
+    padding: 3px;
+    border: 2px solid transparent;
+    border-radius: 7px;
+    background: var(--swatch);
+    background-clip: content-box;
+    cursor: pointer;
+  }
+
+  .swatch-row button.chosen {
+    border-color: #ffd957;
+  }
+
+  .finish-character {
+    min-height: 36px;
+    border: 1px solid rgba(255, 217, 87, 0.72);
+    border-radius: 8px;
+    background: linear-gradient(#5d4917, #30230a);
+    color: #fff4bf;
+    font-weight: 900;
+    cursor: pointer;
+  }
+
+  .finish-character:disabled {
+    cursor: wait;
+    opacity: 0.65;
   }
 
   .title-name:hover,
@@ -2369,7 +3027,9 @@
 
   .level-progress {
     position: relative;
+    z-index: 2;
     display: grid;
+    width: 55%;
   }
 
   .level-meter {
@@ -2391,8 +3051,8 @@
   .xp-tooltip {
     position: absolute;
     left: 0;
-    top: calc(100% + 7px);
-    z-index: 3;
+    bottom: calc(100% + 2px);
+    z-index: 6;
     width: max-content;
     max-width: 220px;
     border: 1px solid rgba(215, 201, 161, 0.32);
@@ -2406,7 +3066,7 @@
     line-height: 1.25;
     opacity: 0;
     pointer-events: none;
-    transform: translateY(-2px);
+    transform: translateY(2px);
     transition:
       opacity 120ms ease,
       transform 120ms ease;
@@ -2415,6 +3075,15 @@
   .level-progress:hover .xp-tooltip {
     opacity: 1;
     transform: translateY(0);
+  }
+
+  .xp-tooltip::after {
+    position: absolute;
+    left: 10px;
+    top: 100%;
+    border: 4px solid transparent;
+    border-top-color: rgba(45, 38, 28, 0.96);
+    content: "";
   }
 
   .notification-popup {
@@ -2441,16 +3110,181 @@
   }
 
   .notification-popup.tutorial-popup {
+    position: absolute;
+    z-index: 23;
+    top: 46px;
+    right: 10px;
+    left: 10px;
+    margin: 0;
     border-color: rgba(255, 217, 87, 0.48);
+    background: rgba(45, 38, 28, 0.98);
     box-shadow:
       0 0 0 2px rgba(255, 217, 87, 0.08),
-      0 0 18px rgba(255, 217, 87, 0.12);
+      0 12px 30px rgba(0, 0, 0, 0.58),
+      0 0 18px rgba(255, 217, 87, 0.2);
+  }
+
+  .notification-popup.tutorial-notification-review {
+    position: relative;
+    z-index: 23;
+    border-color: rgba(255, 229, 126, 0.72);
+    outline: 2px solid #fff0a8;
+    outline-offset: 3px;
+    box-shadow:
+      0 0 0 4px rgba(255, 217, 87, 0.14),
+      0 10px 28px rgba(0, 0, 0, 0.56),
+      0 0 22px rgba(255, 217, 87, 0.52);
+    animation: tutorial-target-pulse 1.1s ease-in-out infinite;
+  }
+
+  .notification-popup.unlock-reveal-popup {
+    position: relative;
+    overflow: hidden;
+    gap: 10px;
+    border-color: rgba(255, 217, 87, 0.58);
+    padding: 12px;
+    background:
+      radial-gradient(circle at 50% 0%, rgba(255, 217, 87, 0.18), transparent 52%),
+      linear-gradient(145deg, rgba(58, 47, 29, 0.98), rgba(28, 25, 21, 0.98));
+    box-shadow:
+      inset 0 0 0 1px rgba(255, 244, 196, 0.08),
+      0 8px 22px rgba(0, 0, 0, 0.36),
+      0 0 18px rgba(255, 217, 87, 0.18);
+    animation: unlock-card-reveal 520ms cubic-bezier(0.16, 0.9, 0.24, 1);
+  }
+
+  .notification-popup.scene-unlock-overlay {
+    position: absolute;
+    z-index: 8;
+    inset: 0;
+    align-content: center;
+    margin: 0;
+    border-radius: inherit;
+    background:
+      radial-gradient(circle at 50% 0%, rgba(255, 217, 87, 0.2), transparent 52%),
+      linear-gradient(145deg, rgba(58, 47, 29, 0.99), rgba(28, 25, 21, 0.99));
+  }
+
+  .scene-unlock-overlay .scene-unlock-preview {
+    height: 72px;
+  }
+
+  .notification-popup.unlock-reveal-popup::before {
+    position: absolute;
+    top: -80%;
+    left: -28%;
+    width: 42%;
+    height: 250%;
+    background: linear-gradient(
+      90deg,
+      transparent,
+      rgba(255, 244, 196, 0.16),
+      transparent
+    );
+    content: "";
+    pointer-events: none;
+    transform: rotate(20deg);
+    animation: unlock-card-shine 1.15s 180ms ease-out both;
+  }
+
+  .unlock-reveal-heading {
+    position: relative;
+    z-index: 1;
+    display: grid;
+    gap: 3px;
+    text-align: center;
+  }
+
+  .unlock-reveal-heading span {
+    color: #d7c9a1;
+    font-size: 0.64rem;
+    font-weight: 900;
+    letter-spacing: 0.16em;
+    text-transform: uppercase;
+  }
+
+  .unlock-reveal-heading strong {
+    color: #fff0a8;
+    font-size: 1rem;
+    line-height: 1.15;
+    text-shadow: 0 0 14px rgba(255, 217, 87, 0.34);
+  }
+
+  .scene-unlock-preview {
+    position: relative;
+    z-index: 1;
+    display: grid;
+    place-items: center;
+    height: 92px;
+    overflow: hidden;
+    border: 1px solid rgba(255, 240, 168, 0.22);
+    border-radius: 7px;
+    background: rgba(244, 240, 232, 0.05);
+  }
+
+  .scene-unlock-preview img {
+    position: relative;
+    z-index: 1;
+    width: 100%;
+    height: 100%;
+    object-fit: contain;
+    animation: scene-preview-arrive 850ms cubic-bezier(0.16, 0.9, 0.24, 1);
+  }
+
+  .scene-unlock-preview i {
+    position: absolute;
+    width: 130px;
+    height: 130px;
+    border-radius: 50%;
+    background: radial-gradient(circle, rgba(255, 217, 87, 0.25), transparent 68%);
+    animation: scene-preview-glow 1.5s ease-in-out infinite;
+  }
+
+  .notification-popup .unlock-reveal-copy,
+  .notification-popup .title-reveal-description,
+  .notification-popup .title-reveal-flavor {
+    position: relative;
+    z-index: 1;
+    text-align: center;
+  }
+
+  .notification-popup .unlock-reveal-copy,
+  .notification-popup .title-reveal-description {
+    color: #f4f0e8;
+    font-size: 0.76rem;
+  }
+
+  .notification-popup .title-reveal-flavor {
+    border-top: 1px solid rgba(215, 201, 161, 0.18);
+    padding-top: 8px;
+    color: #d7c9a1;
+    font-size: 0.72rem;
+    font-style: italic;
+    font-weight: 700;
+  }
+
+  .notification-popup.tutorial-popup.tutorial-popup-below-influence {
+    top: 196px;
+  }
+
+  .notification-popup.tutorial-popup.tutorial-popup-scene {
+    top: 8px;
+    gap: 4px;
+    padding: 6px 8px;
   }
 
   .notification-popup .tutorial-progress {
     color: #aaa296;
     font-size: 0.68rem;
     font-weight: 800;
+    text-transform: uppercase;
+  }
+
+  .notification-popup .tutorial-input-progress {
+    color: #fff0a8;
+    font-size: 0.7rem;
+    font-weight: 900;
+    letter-spacing: 0.04em;
     text-transform: uppercase;
   }
 
@@ -2572,15 +3406,51 @@
     box-shadow: 0 0 0 2px rgba(150, 226, 211, 0.16);
   }
 
+  .tutorial-dimmer {
+    position: absolute;
+    z-index: 20;
+    inset: 0;
+    border-radius: inherit;
+    background: rgba(0, 0, 0, 0.7);
+    cursor: default;
+  }
+
   .tutorial-target {
     position: relative;
-    z-index: 2;
+    z-index: 22;
     outline: 2px solid #fff0a8;
     outline-offset: 3px;
+    background-color: rgba(30, 27, 22, 0.98);
     box-shadow:
       0 0 0 4px rgba(255, 217, 87, 0.14),
       0 0 20px rgba(255, 217, 87, 0.58);
     animation: tutorial-target-pulse 1.1s ease-in-out infinite;
+  }
+
+  .notification-button.tutorial-target {
+    color: #1f1704;
+    background: #ffd957;
+    font-size: 0.82rem;
+    line-height: 1;
+  }
+
+  .details.tutorial-target,
+  .shop.tutorial-target,
+  .inventory.tutorial-target,
+  .settings.tutorial-target {
+    border-radius: 8px;
+  }
+
+  .tutorial-step-action {
+    position: absolute;
+    z-index: 24;
+    inset: 0;
+    width: 100%;
+    height: 100%;
+    border: 0;
+    padding: 0;
+    background: transparent;
+    cursor: pointer;
   }
 
   @keyframes tutorial-target-pulse {
@@ -2593,6 +3463,102 @@
     50% {
       outline-color: #fff8d5;
       filter: brightness(1.24);
+    }
+  }
+
+  @keyframes unlock-card-reveal {
+    0% {
+      opacity: 0;
+      transform: translateY(12px) scale(0.94);
+    }
+
+    70% {
+      opacity: 1;
+      transform: translateY(-1px) scale(1.015);
+    }
+
+    100% {
+      opacity: 1;
+      transform: translateY(0) scale(1);
+    }
+  }
+
+  @keyframes unlock-card-shine {
+    0% {
+      opacity: 0;
+      transform: translateX(0) rotate(20deg);
+    }
+
+    30% {
+      opacity: 1;
+    }
+
+    100% {
+      opacity: 0;
+      transform: translateX(360px) rotate(20deg);
+    }
+  }
+
+  @keyframes scene-stage-reveal {
+    0% {
+      opacity: 0.35;
+      transform: scale(0.965);
+      filter: brightness(1.7);
+    }
+
+    55% {
+      opacity: 1;
+      transform: scale(1.012);
+      filter: brightness(1.15);
+    }
+
+    100% {
+      transform: scale(1);
+      filter: brightness(1);
+    }
+  }
+
+  @keyframes scene-preview-arrive {
+    0% {
+      opacity: 0;
+      transform: scale(0.78);
+      filter: brightness(1.8);
+    }
+
+    100% {
+      opacity: 1;
+      transform: scale(1);
+      filter: brightness(1);
+    }
+  }
+
+  @keyframes scene-preview-glow {
+    0%,
+    100% {
+      opacity: 0.45;
+      transform: scale(0.82);
+    }
+
+    50% {
+      opacity: 1;
+      transform: scale(1.08);
+    }
+  }
+
+  @keyframes title-rank-reveal {
+    0% {
+      opacity: 0;
+      transform: translateY(5px) scale(0.92);
+    }
+
+    65% {
+      opacity: 1;
+      transform: translateY(-1px) scale(1.04);
+    }
+
+    100% {
+      opacity: 1;
+      transform: translateY(0) scale(1);
     }
   }
 
@@ -2721,13 +3687,6 @@
     padding: 9px;
   }
 
-  .inventory li p {
-    margin: 0;
-    color: #f4f0e8;
-    font-size: 0.8rem;
-    font-weight: 900;
-  }
-
   .inventory li small {
     color: #aaa296;
     font-size: 0.7rem;
@@ -2735,24 +3694,213 @@
     line-height: 1.25;
   }
 
+  .wardrobe,
+  .items-category {
+    display: grid;
+    gap: 8px;
+  }
+
+  .wardrobe-heading,
+  .inventory-category-heading {
+    display: grid;
+    gap: 2px;
+  }
+
+  .wardrobe-heading p,
+  .inventory-category-heading p {
+    margin: 0;
+    color: #f4f0e8;
+    font-size: 0.82rem;
+    font-weight: 950;
+  }
+
+  .wardrobe-heading small,
+  .inventory-category-heading small {
+    color: #b9ad87;
+    font-size: 0.68rem;
+    font-weight: 750;
+  }
+
+  .items-category {
+    border-top: 1px solid rgba(244, 240, 232, 0.12);
+    padding-top: 10px;
+  }
+
+  .item-list {
+    grid-template-columns: repeat(4, minmax(0, 1fr));
+    gap: 6px;
+  }
+
+  .inventory .item-list .inventory-item-card {
+    position: relative;
+    min-width: 0;
+    padding: 0;
+  }
+
+  .inventory-item-button {
+    display: grid;
+    place-items: center;
+    width: 100%;
+    min-height: 56px;
+    border: 0;
+    border-radius: inherit;
+    padding: 4px;
+    color: inherit;
+    background: transparent;
+    cursor: help;
+  }
+
+  .inventory-item-button:hover,
+  .inventory-item-button:focus-visible {
+    background: rgba(255, 255, 255, 0.04);
+  }
+
+  .item-icon {
+    display: grid;
+    place-items: center;
+    width: 48px;
+    height: 48px;
+    border: 1px solid rgba(255, 217, 87, 0.16);
+    border-radius: 8px;
+    background:
+      radial-gradient(circle, rgba(255, 217, 87, 0.1), transparent 68%),
+      rgba(12, 11, 10, 0.3);
+  }
+
+  .item-icon img {
+    width: 44px;
+    height: 44px;
+    object-fit: contain;
+  }
+
+  .wardrobe-list {
+    grid-template-columns: repeat(4, minmax(0, 1fr));
+    gap: 6px;
+  }
+
+  .inventory .wardrobe-list li {
+    position: relative;
+    padding: 0;
+  }
+
+  .inventory .wardrobe-list li.equipped-outfit {
+    border-color: rgba(255, 217, 87, 0.68);
+    box-shadow: 0 0 0 1px rgba(255, 217, 87, 0.12);
+  }
+
+  .wardrobe-item {
+    display: grid;
+    place-items: center;
+    width: 100%;
+    min-height: 52px;
+    border: 0;
+    border-radius: inherit;
+    padding: 4px;
+    color: inherit;
+    background: transparent;
+    font: inherit;
+    text-align: left;
+    cursor: pointer;
+  }
+
+  .wardrobe-item:hover {
+    background: rgba(255, 255, 255, 0.04);
+  }
+
+  .wardrobe-item[aria-pressed="true"] {
+    background: rgba(255, 217, 87, 0.08);
+    cursor: default;
+  }
+
+  .outfit-preview {
+    display: grid;
+    place-items: center;
+    width: 42px;
+    height: 42px;
+  }
+
+  .outfit-preview img {
+    width: 42px;
+    height: 42px;
+    object-fit: contain;
+    object-position: center;
+  }
+
+  .inventory-icon-tooltip {
+    position: absolute;
+    z-index: 30;
+    left: 0;
+    top: calc(100% + 7px);
+    display: grid;
+    width: 190px;
+    gap: 3px;
+    border: 1px solid rgba(215, 201, 161, 0.36);
+    border-radius: 7px;
+    padding: 8px;
+    color: #f4f0e8;
+    background: rgba(31, 27, 22, 0.98);
+    box-shadow: 0 10px 24px rgba(0, 0, 0, 0.52);
+    text-align: left;
+    opacity: 0;
+    pointer-events: none;
+    transform: translateY(3px);
+    transition:
+      opacity 100ms ease,
+      transform 100ms ease;
+  }
+
+  .wardrobe-list li:nth-child(4n + 3) .inventory-icon-tooltip,
+  .wardrobe-list li:nth-child(4n + 4) .inventory-icon-tooltip,
+  .item-list li:nth-child(4n + 3) .inventory-icon-tooltip,
+  .item-list li:nth-child(4n + 4) .inventory-icon-tooltip {
+    right: 0;
+    left: auto;
+  }
+
+  .wardrobe-item:hover .inventory-icon-tooltip,
+  .wardrobe-item:focus-visible .inventory-icon-tooltip,
+  .inventory-item-button:hover .inventory-icon-tooltip,
+  .inventory-item-button:focus-visible .inventory-icon-tooltip {
+    opacity: 1;
+    transform: translateY(0);
+  }
+
+  .inventory-icon-tooltip strong {
+    margin: 0;
+    color: #f4f0e8;
+    font-size: 0.72rem;
+    font-weight: 900;
+    line-height: 1.15;
+  }
+
+  .inventory-icon-tooltip small {
+    color: #aaa296;
+    font-size: 0.64rem;
+    font-weight: 700;
+  }
+
+  .item-tooltip {
+    width: 210px;
+  }
+
   .inventory-effect-details {
     display: grid;
-    gap: 6px;
+    gap: 4px;
     margin: 3px 0 0;
   }
 
-  .inventory-effect-details div {
+  .inventory-effect-details > span {
     display: grid;
-    grid-template-columns: 72px minmax(0, 1fr);
+    grid-template-columns: 62px minmax(0, 1fr);
     align-items: start;
     gap: 8px;
     border: 1px solid rgba(244, 240, 232, 0.1);
     border-radius: 4px;
-    padding: 6px 7px;
+    padding: 4px 5px;
     background: rgba(12, 11, 10, 0.32);
   }
 
-  .inventory-effect-details dt {
+  .inventory-effect-details b {
     margin: 1px 0 0;
     color: #8f887d;
     font-size: 0.55rem;
@@ -2761,7 +3909,7 @@
     text-transform: uppercase;
   }
 
-  .inventory-effect-details dd {
+  .inventory-effect-details small {
     margin: 0;
     color: #d8d1c5;
     font-size: 0.68rem;

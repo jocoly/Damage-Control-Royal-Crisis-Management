@@ -1,4 +1,5 @@
 import { levelDefinition } from "$lib/levelCatalog";
+import { ITEM_UNLOCK_LEVELS } from "$lib/unlockCatalog";
 
 export type ProcVisualFamily =
   | "spark"
@@ -164,7 +165,7 @@ export const shopItems: ShopItem[] = [
   {
     id: "royal_contract",
     name: "Royal Contract",
-    cost: costForLevel(2),
+    cost: 1_000,
     requiredLevel: 2,
     category: "org_chart",
     effect:
@@ -172,7 +173,9 @@ export const shopItems: ShopItem[] = [
     inventoryDescription:
       "Your official contract confirms that you work for the Royal Influence Office.",
   },
-  ...Array.from({ length: 98 }, (_, index) => createPowerUpgrade(index + 3)),
+  ...ITEM_UNLOCK_LEVELS.slice(1).map((level, index) =>
+    createPowerUpgrade(level, index),
+  ),
 ];
 
 export function powerUpgradeDetails(item: ShopItem): PowerUpgradeDetails | null {
@@ -192,12 +195,36 @@ export function powerUpgradeDetails(item: ShopItem): PowerUpgradeDetails | null 
   };
 }
 
+export function inventoryImageForItem(item: ShopItem): string {
+  if (item.id === "royal_contract") {
+    return "/items/contract.png";
+  }
+
+  if (
+    /(crystal|orb|egg|beacon|signal|core|engine|ward|runic|rune|aether)/.test(
+      item.id,
+    )
+  ) {
+    return "/items/crystal.png";
+  }
+
+  if (
+    /(contract|permit|license|charter|notes|scroll|poster|schedule|blueprint|handbook|playbook|ledger|codex|tome|journal|map|manual|decree|folder|archive)/.test(
+      item.id,
+    )
+  ) {
+    return "/items/ledger.png";
+  }
+
+  return "/items/relic.png";
+}
+
 export function shopItemForLevel(level: number) {
   return shopItems.find((item) => item.requiredLevel === level);
 }
 
-function createPowerUpgrade(level: number): ShopItem {
-  const [id, name, procEffect] = powerUpgradeContent[level - 3];
+function createPowerUpgrade(level: number, contentIndex: number): ShopItem {
+  const [id, name, procEffect] = powerUpgradeContent[contentIndex];
   const chancePerMillion = chancePerMillionForLevel(level);
   const procValue = procValueForLevel(level);
   const procChance = `${formatChance(chancePerMillion)}% chance`;
@@ -214,7 +241,7 @@ function createPowerUpgrade(level: number): ShopItem {
     procEffect,
     procValue,
     expectedValuePerThousandInputs: Math.round((chancePerMillion * procValue) / 1_000),
-    visualFamily: visualFamilies[(level - 3) % visualFamilies.length],
+    visualFamily: visualFamilies[contentIndex % visualFamilies.length],
     visualHue: (level * 47) % 360,
     visualIntensity: Math.min(1, 0.32 + level / 130),
   };
@@ -261,6 +288,8 @@ function formatChance(chancePerMillion: number) {
     .replace(/\.$/, "");
 }
 
-if (powerUpgradeContent.length !== 98) {
-  throw new Error(`Expected 98 power upgrade entries, found ${powerUpgradeContent.length}.`);
+if (powerUpgradeContent.length < ITEM_UNLOCK_LEVELS.length - 1) {
+  throw new Error(
+    `Expected at least ${ITEM_UNLOCK_LEVELS.length - 1} power upgrade entries, found ${powerUpgradeContent.length}.`,
+  );
 }

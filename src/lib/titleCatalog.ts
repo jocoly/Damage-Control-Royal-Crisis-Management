@@ -30,15 +30,15 @@ const titleBands: TitleBand[] = [
         "You file posts and forms for the Royal Influence Office.",
         "WELCOME1 somehow meets court security policy.",
       ],
+      [
+        "You schedule posts for the kingdom's message board.",
+        "The morning proclamation is delayed while a herald installs updates.",
+      ],
     ],
   },
   {
     name: "Court Marketing Associate",
     levels: [
-      [
-        "You schedule posts for the kingdom's message board.",
-        "The morning proclamation is delayed while a herald installs updates.",
-      ],
       [
         "You answer routine comments beneath royal decrees.",
         "Most subjects ask whether the king's account was hacked again.",

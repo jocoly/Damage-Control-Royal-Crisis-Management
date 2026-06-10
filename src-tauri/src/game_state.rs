@@ -13,7 +13,6 @@ use std::{
 };
 
 pub const SAVE_VERSION: u32 = 4;
-#[derive(Default)]
 pub struct InputCounts {
     pub(crate) keys: AtomicU64,
     pub(crate) clicks: AtomicU64,
@@ -35,7 +34,37 @@ pub struct InputCounts {
     pub(crate) kingdom_name: Mutex<Option<String>>,
     pub(crate) pressed_keys: Mutex<HashSet<rdev::Key>>,
     pub(crate) inventory: Mutex<Inventory>,
+    pub(crate) input_enabled: AtomicBool,
     pub(crate) dirty: AtomicBool,
+}
+
+impl Default for InputCounts {
+    fn default() -> Self {
+        Self {
+            keys: AtomicU64::default(),
+            clicks: AtomicU64::default(),
+            bonus_influence: AtomicU64::default(),
+            spent_influence: AtomicU64::default(),
+            crumpled_court_onboarding_manual_input_baseline: AtomicU64::default(),
+            crumpled_court_onboarding_manual_trigger_count: AtomicU64::default(),
+            pending_power_proc_inputs: AtomicU64::default(),
+            last_power_proc_roll_at_millis: AtomicU64::default(),
+            random_state: AtomicU64::default(),
+            power_event_sequence: AtomicU64::default(),
+            last_power_event_at_millis: AtomicU64::default(),
+            last_power_event_amount: AtomicU64::default(),
+            last_power_event_item_level: AtomicU64::default(),
+            last_input_at_millis: AtomicU64::default(),
+            last_global_key_at_millis: AtomicU64::default(),
+            seen_story_event_ids: Mutex::default(),
+            seen_shop_item_ids: Mutex::default(),
+            kingdom_name: Mutex::default(),
+            pressed_keys: Mutex::default(),
+            inventory: Mutex::default(),
+            input_enabled: AtomicBool::new(true),
+            dirty: AtomicBool::default(),
+        }
+    }
 }
 
 #[derive(Serialize)]
@@ -136,6 +165,21 @@ pub struct PurchaseResult {
 }
 
 impl InputCounts {
+    pub(crate) fn set_input_enabled(&self, enabled: bool) {
+        self.input_enabled.store(enabled, Ordering::Relaxed);
+
+        if !enabled {
+            self.pressed_keys
+                .lock()
+                .expect("pressed keys lock poisoned")
+                .clear();
+        }
+    }
+
+    pub(crate) fn can_record_input(&self) -> bool {
+        self.input_enabled.load(Ordering::Relaxed) && self.has_kingdom_name()
+    }
+
     pub(crate) fn snapshot(&self) -> InputSnapshot {
         self.flush_due_power_upgrades(current_time_millis());
 

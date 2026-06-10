@@ -139,6 +139,7 @@ pub fn run() {
                 eprintln!("initial save load failed: {error}");
             }
 
+            setup_counts.set_input_enabled(settings.character_created);
             setup_settings.load(settings.clone());
             if let Err(error) = apply_app_settings(app.handle(), &settings) {
                 eprintln!("settings apply failed: {error}");

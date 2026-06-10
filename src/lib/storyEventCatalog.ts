@@ -16,6 +16,8 @@ export type PurchaseStoryEvent = StoryEventBase & {
 
 export type MenuTutorialTarget =
   | "anywhere"
+  | "influence"
+  | "scene"
   | "notifications"
   | "details"
   | "shop"
@@ -65,9 +67,10 @@ export const kingdomNamingStoryEvent: KingdomNamingStoryEvent = {
 export const hiredStoryEvent: NotificationStoryEvent = {
   id: "you_are_hired",
   kind: "notification",
-  minLevel: 1,
+  minLevel: 2,
   title: "You're Hired!",
-  body: "Your appointment to the Royal Influence Office is now official.",
+  body:
+    "Your appointment to the Royal Influence Office is now official. Your new title is Court Marketing Intern.",
 };
 
 export const royalContractStoryEvent: PurchaseStoryEvent = {
@@ -75,9 +78,9 @@ export const royalContractStoryEvent: PurchaseStoryEvent = {
   kind: "purchase",
   itemId: "royal_contract",
   minLevel: 2,
-  title: "A Royal Contract",
+  title: "Office Upgraded!",
   body:
-    "The ink is barely dry, but the paperwork appears official enough. You now work under contract for the Royal Influence Office, with all the duties and very few of the privileges. Your new title is Court Marketing Manager.",
+    "The ink is barely dry, but the paperwork appears official enough. You leave the broom closet behind for a proper office and become Court Marketing Manager for the Royal Influence Office.",
 };
 
 export const storyEvents: StoryEvent[] = [
@@ -91,9 +94,14 @@ export const storyEvents: StoryEvent[] = [
     body: "Click each highlighted button to inspect your new desk.",
     steps: [
       {
-        target: "anywhere",
+        target: "influence",
         body:
-          "Influence is your contribution to the kingdom's reputation far and wide. You earn one Influence for each keypress or mouse click, with additional Influence available from upgrades. Click anywhere to proceed.",
+          "Influence rises with every mouse click or keypress. Click or press a key anywhere five times and watch the number grow.",
+      },
+      {
+        target: "scene",
+        body:
+          "Your scene and character improve as you level. Click anywhere to proceed.",
       },
       {
         target: "notifications",
@@ -103,22 +111,22 @@ export const storyEvents: StoryEvent[] = [
       {
         target: "details",
         body:
-          "Details breaks down your keys, clicks, perks, and spending. Click Details to proceed.",
+          "Details breaks down your keys, clicks, perks, and spending. Click anywhere to continue.",
       },
       {
         target: "shop",
         body:
-          "Shop lets you spend Influence on upgrades to your marketing strategy. There's nothing available for purchase right now, but you'll unlock items as you level up. Click Shop to open it.",
+          "Shop lets you spend Influence on upgrades to your marketing strategy. You'll unlock items as you level up. Click anywhere to continue.",
       },
       {
         target: "inventory",
         body:
-          "Inventory will show what you own after purchases. Click Inventory to open it.",
+          "Inventory holds purchased items and your wardrobe. Click anywhere to continue.",
       },
       {
         target: "settings",
         body:
-          "Settings has customization options. Click Settings to finish the tour.",
+          "Settings has customization options. Click anywhere to finish the tour.",
       },
     ],
   },

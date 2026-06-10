@@ -186,11 +186,11 @@ fn purchasing_royal_contract_spends_influence_and_adds_org_chart_inventory() {
     let result = counts.purchase_shop_item(ROYAL_CONTRACT_ID);
 
     assert!(matches!(result.status, PurchaseStatus::Purchased));
-    assert_eq!(result.snapshot.influence, 1_950);
+    assert_eq!(result.snapshot.influence, 1_500);
     assert_eq!(result.snapshot.xp, 2_500);
     assert_eq!(result.snapshot.level, 3);
     assert_eq!(result.snapshot.keys, 2_500);
-    assert_eq!(result.snapshot.spent_influence, 550);
+    assert_eq!(result.snapshot.spent_influence, 1_000);
     assert_eq!(
         result.snapshot.inventory_item_ids,
         vec![ROYAL_CONTRACT_ID.to_string()]
@@ -216,15 +216,21 @@ fn power_upgrade_purchase_is_level_gated_and_stored_separately() {
     assert!(matches!(locked_result.status, PurchaseStatus::Locked));
     assert!(locked_result.snapshot.inventory_item_ids.is_empty());
 
-    counts.dev_add_influence(3_000);
+    counts.dev_add_influence(100_000);
     let contract_result = counts.purchase_shop_item(ROYAL_CONTRACT_ID);
     let purchased_result = counts.purchase_shop_item("crumpled_court_onboarding_manual");
     let save_data = counts.snapshot_save();
+    let total_cost = find_shop_item(ROYAL_CONTRACT_ID)
+        .expect("royal contract exists")
+        .cost
+        + find_shop_item(CRUMPLED_COURT_ONBOARDING_MANUAL_ID)
+            .expect("onboarding manual exists")
+            .cost;
 
     assert!(matches!(contract_result.status, PurchaseStatus::Purchased));
     assert!(matches!(purchased_result.status, PurchaseStatus::Purchased));
-    assert_eq!(purchased_result.snapshot.influence, 250);
-    assert_eq!(purchased_result.snapshot.spent_influence, 2_750);
+    assert_eq!(purchased_result.snapshot.influence, 100_000 - total_cost);
+    assert_eq!(purchased_result.snapshot.spent_influence, total_cost);
     assert_eq!(
         purchased_result.snapshot.inventory_item_ids,
         vec![
@@ -277,15 +283,21 @@ fn dev_add_influence_changes_earned_state_without_spending() {
 fn crumpled_court_onboarding_manual_tracks_random_proc_state_after_purchase() {
     let counts = named_counts();
 
-    counts.dev_add_influence(3_000);
+    counts.dev_add_influence(100_000);
     let contract_result = counts.purchase_shop_item(ROYAL_CONTRACT_ID);
     let purchased_result = counts.purchase_shop_item(CRUMPLED_COURT_ONBOARDING_MANUAL_ID);
+    let total_cost = find_shop_item(ROYAL_CONTRACT_ID)
+        .expect("royal contract exists")
+        .cost
+        + find_shop_item(CRUMPLED_COURT_ONBOARDING_MANUAL_ID)
+            .expect("onboarding manual exists")
+            .cost;
 
     assert!(matches!(contract_result.status, PurchaseStatus::Purchased));
     assert!(matches!(purchased_result.status, PurchaseStatus::Purchased));
-    assert_eq!(purchased_result.snapshot.influence, 250);
+    assert_eq!(purchased_result.snapshot.influence, 100_000 - total_cost);
     assert_eq!(purchased_result.snapshot.bonus_influence, 0);
-    assert_eq!(purchased_result.snapshot.spent_influence, 2_750);
+    assert_eq!(purchased_result.snapshot.spent_influence, total_cost);
     assert_eq!(purchased_result.snapshot.power_event_sequence, 0);
 
     let save_data = counts.snapshot_save();
@@ -294,7 +306,7 @@ fn crumpled_court_onboarding_manual_tracks_random_proc_state_after_purchase() {
     assert_eq!(save_data.crumpled_court_onboarding_manual_trigger_count, 0);
     assert_eq!(
         save_data.crumpled_court_onboarding_manual_input_baseline,
-        3_000
+        100_000
     );
 }
 
@@ -353,15 +365,15 @@ fn all_power_upgrade_catalog_items_have_backend_proc_effects() {
 }
 
 #[test]
-fn shop_has_one_item_per_level_with_mixed_affordability() {
+fn shop_items_follow_the_every_third_level_schedule_with_mixed_affordability() {
     let items = shop_items();
     let mut affordable_unlocks = 0;
     let mut aspirational_unlocks = 0;
 
-    assert_eq!(items.len(), 99);
+    assert_eq!(items.len(), 33);
 
     for (index, item) in items.iter().enumerate() {
-        let expected_level = index as u64 + 2;
+        let expected_level = index as u64 * 3 + 2;
         let unlock_interval = crate::level_catalog::xp_required_for_level(expected_level)
             - crate::level_catalog::xp_required_for_level(expected_level - 1);
 
@@ -374,8 +386,8 @@ fn shop_has_one_item_per_level_with_mixed_affordability() {
         }
     }
 
-    assert!(affordable_unlocks >= 20);
-    assert!(aspirational_unlocks >= 20);
+    assert!(affordable_unlocks >= 8);
+    assert!(aspirational_unlocks >= 8);
 }
 
 #[test]
@@ -510,4 +522,26 @@ fn inputs_are_ignored_until_the_kingdom_is_named() {
 
     assert_eq!(snapshot.keys, 0);
     assert_eq!(snapshot.clicks, 0);
+}
+
+#[test]
+fn inputs_are_ignored_until_character_creation_is_complete() {
+    let counts = named_counts();
+    counts.set_input_enabled(false);
+
+    counts.record_event(EventType::KeyPress(Key::KeyA));
+    counts.record_event(EventType::ButtonPress(Button::Left));
+    counts.record_focused_keypress(1_000);
+
+    let snapshot = counts.snapshot();
+    assert_eq!(snapshot.keys, 0);
+    assert_eq!(snapshot.clicks, 0);
+
+    counts.set_input_enabled(true);
+    counts.record_event(EventType::KeyPress(Key::KeyA));
+    counts.record_event(EventType::ButtonPress(Button::Left));
+
+    let snapshot = counts.snapshot();
+    assert_eq!(snapshot.keys, 1);
+    assert_eq!(snapshot.clicks, 1);
 }
